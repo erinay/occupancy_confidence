@@ -35,22 +35,35 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, num_rings=1
     Returns:
         buffered_binary_conv, normalized_confidence, filtered_occupancy
     """
-
+    Confidence_values = np.copy(C_old) 
     occupancy_map = occupancy_data[-1]
     kernel = create_square_decay_kernel(kernel_size=5, decay=0.2)
 
     # Convolve the occupancy map with the kernel
     buffered_binary_conv = ndimage.convolve(occupancy_map, kernel, mode='constant', cval=0.0)
 
-    # Sigmoid-like transformation
-    beta = 0.01
-    sig = 1 - np.exp(-beta * buffered_binary_conv)
-    C_max = 1.0
-    Confidence_values = (1 - sig) * C_old + sig * C_max  # Boost strong responses
+    Th = 1.0  # Convolution Threshold for strong responses
+   
+    # Increase confidence in regions with  above_convolution_threshold
+    beta1 = 0.1
+    sig1 = 1 - np.exp(-beta1 * buffered_binary_conv) # sigmoid
+    mask1 = buffered_binary_conv > Th
 
+    C_plus = 1.0  # Confidence boost for strong responses
+    Confidence_values[mask1] = (1 - sig1[mask1]) * C_old[mask1] + sig1[mask1] * C_plus  # Boost strong responses
+
+    # Decrease confidence in regions with below_convolution_threshold
+    beta2 = 0.5
+    k = 0.5
+    sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
+    mask2 = buffered_binary_conv <= Th
+    
+    C_minus = 0.0 # Confidence reduction for weak responses`
+    # Confidence_values[mask2] = (1 - sig[mask2]) * C_old[mask2] + sig[mask2] * C_minus  
+    Confidence_values[mask2] = (1 - sig2) * C_old[mask2] + sig2 * C_minus  
+    
     # Normalize and threshold
-
-    filtered_occupancy = (Confidence_values >= 1.0).astype(int)
+    filtered_occupancy = (Confidence_values >= 0.7).astype(int)
     return buffered_binary_conv, Confidence_values, filtered_occupancy
 
 

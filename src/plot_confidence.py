@@ -41,7 +41,7 @@ axs[3].set_title(f"Convolution on Buffered Binary Frame\nFrame 0")
 axs[4].set_title("Confidence Values \n from Convolution on (Current Frame)")
 axs[5].set_title(f"Filtered Occupancy Map\nFiltering: ACTIVE")
 
-Confidence_values_conv = 0
+Confidence_values_conv = np.zeros((HEIGHT, WIDTH))  # Initialize confidence values for convolution
 while True:
 # for i in range(1):
     # Initialize buffer and plotting
