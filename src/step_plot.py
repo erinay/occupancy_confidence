@@ -2,18 +2,27 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage
 import pandas as pd
-from utils import Filtered_Occupancy, Filtered_Occupancy_Convolution, decay_occupancy
+from utils import *
 import cv2
 import matplotlib.patches as patches
-
+from scipy.ndimage import affine_transform
+from scipy.spatial.transform import Rotation as R
+import re
 
 # Load data
-df = pd.read_csv("data/_map_convert.csv")
+df = pd.read_csv("data/mEnv_mRobf/_map_convert.csv")
+# df2 = pd.read_csv("data/sENv_mRob/_imu.csv")
 
 HEIGHT, WIDTH, N_frames = 120, 120, 5
 step=2
-scale_factor=1e4
+scale_factor=1e4*2.5
+# scale_factor=1e2
 y_quiv, x_quiv = np.mgrid[0:HEIGHT:step, 0:WIDTH:step]
+
+# Initialize IMU data storage (Trial 1: quaternion)
+# imu_times = df2["timestamp"]
+last_pc_time = 0
+q_rel=None
 
 # Plot setup
 # plt.ion()
@@ -21,23 +30,32 @@ fig, axs = plt.subplots(2,3, figsize=(15, 8))
 axs = axs.flatten()
 
 im0 = axs[0].imshow(np.zeros((HEIGHT, WIDTH)), cmap='gray', vmin=0, vmax=1, origin='lower')
-im1 = axs[1].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', vmin=0, vmax=10.0, origin='lower')
+im1 = axs[1].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', vmin=0, vmax=25.0, origin='lower')
+# im2 = axs[2].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', vmin=0, vmax=25.0, origin='lower')
 im3 = axs[3].imshow(np.zeros((HEIGHT, WIDTH)), cmap='viridis', vmin=0, vmax=3, origin='lower')
 im2 = axs[2].imshow(np.zeros((HEIGHT,WIDTH)), origin='lower')
-im4 = axs[4].imshow(np.zeros((HEIGHT, WIDTH)), cmap='gray', vmin=0, vmax=1, origin='lower')
-im5 = axs[5].imshow(np.zeros((HEIGHT, WIDTH)), origin='lower')
+im4 = axs[4].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', interpolation='none', origin='lower', vmin=0, vmax=1,)
+im5 = axs[5].imshow(np.zeros((HEIGHT, WIDTH)), cmap='gray', vmin=0, vmax=1, origin='lower')
+# im5 = axs[5].imshow(np.zeros((HEIGHT, WIDTH)), origin='lower')
 
 fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
 fig.colorbar(im3, ax=axs[3], fraction=0.046, pad=0.04)
+fig.colorbar(im4, ax=axs[4], fraction=0.046, pad=0.04)
+
+axs[4].set_title("Confidence Values \n from Convolution on (Current Frame)")
 
 quiver = axs[2].quiver(x_quiv, y_quiv, np.zeros_like(x_quiv), np.zeros_like(y_quiv), 
+                       color='red', scale=1, scale_units='xy', angles='xy')
+
+quiver2 = axs[4].quiver(x_quiv, y_quiv, np.zeros_like(x_quiv), np.zeros_like(y_quiv), 
                        color='red', scale=1, scale_units='xy', angles='xy')
 
 for ax in axs:
     ax.axis("off")
 
 # Globals
-frame_index = 0
+frame_init = 0
+frame_index = frame_init
 BUFFERED_BINARY_FRAMES = []
 Confidence_values_conv = np.zeros((HEIGHT, WIDTH))
 Confidence_values_decay = np.zeros((HEIGHT, WIDTH))  # Initialize confidence values for convolution
@@ -46,7 +64,7 @@ prev_buffered_binary = np.zeros((HEIGHT, WIDTH))
 
 # KEY HANDLER
 def on_key(event):
-    global frame_index, BUFFERED_BINARY_FRAMES, Confidence_values_conv, Confidence_values_decay, prev_filtered_binary_conv, prev_buffered_binary
+    global frame_index, BUFFERED_BINARY_FRAMES, Confidence_values_conv, Confidence_values_decay,prev_filtered_binary_conv, prev_buffered_binary
 
     if event.key != 'right':
         return
@@ -55,8 +73,8 @@ def on_key(event):
         print("Reached end of frames.")
         return
 
-    # Extract and parse data
-    msg = df["data"][frame_index]
+    # Extract and parse data 
+    msg = df["data"][frame_index]   
     index = msg.find("data=")
     array_start = index + 6
     occupancy_str = msg[array_start:-2]
@@ -65,7 +83,6 @@ def on_key(event):
 
     buffered_binary = ndimage.binary_dilation(occupancy_arr, iterations=1).astype(int)
     # buffered_binary = occupancy_arr
-   
 
     BUFFERED_BINARY_FRAMES.append(buffered_binary)
     if len(BUFFERED_BINARY_FRAMES) > N_frames:
@@ -74,29 +91,25 @@ def on_key(event):
     C_old_conv = Confidence_values_conv
 
     if len(BUFFERED_BINARY_FRAMES) >= N_frames:
-        Confidence_values, filtered_binary = Filtered_Occupancy(BUFFERED_BINARY_FRAMES, N_frames)
-        buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames)
+        buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, q_rel)
         status = "ACTIVE"
     else:
-        Confidence_values = filtered_binary = buffered_binary
-        buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames)
+        buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, q_rel)
         status = "INACTIVE"
-
-    decay_map = decay_occupancy(buffered_binary, Confidence_values_decay, decay_rate=0.9)
-    # print(np.amax(decay_map))
+    decay_map = decay_occupancy(buffered_binary_conv, Confidence_values_decay, q_rel, decay_rate=0.85)
     # Draw circles on decay map at pixels with value in [3.0, 3.5]
     circle_radius = 5
     decay_circle_overlay = np.zeros((HEIGHT, WIDTH, 3))  # RGB overlay to draw circles
 
-    ys, xs = np.where((decay_map >= 9.0))
+    ys, xs = np.where((decay_map >= 1.85))
     for x, y in zip(xs, ys):
         cv2.circle(decay_circle_overlay, (x, y), circle_radius, (0.0, 1.0, 0.0), -1)  # red circle
 
     # Convert decay map to RGB and overlay circles
-    decay_rgb = plt.cm.hot(decay_map / 3.5)[..., :3]  # normalize & use colormap (drop alpha)
-    decay_rgb = np.clip(decay_rgb + decay_circle_overlay, 0, 1)  # overlay circles
+    # decay_rgb = plt.cm.hot(decay_map / 3.5)[..., :3]  # normalize & use colormap (drop alpha)
+    # decay_rgb = np.clip(decay_rgb + decay_circle_overlay, 0, 1)  # overlay circles
 
-   # Compute change categories
+    # Compute change categories
     added = (filtered_binary_conv == 1) & (prev_filtered_binary_conv == 0)
     removed = (filtered_binary_conv == 0) & (prev_filtered_binary_conv == 1)
     unchanged = (filtered_binary_conv == 1) & (prev_filtered_binary_conv == 1)
@@ -108,24 +121,27 @@ def on_key(event):
     change_map[added] = [0, 1, 0]       # Green: new occupied
     change_map[removed] = [1, 0, 0]     # Red: removed
     change_map[unchanged] = [1, 1, 1]   # White: still occupied
+    
     # Optical Flow
-    flow = cv2.calcOpticalFlowFarneback(prev_buffered_binary, buffered_binary, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    flow = cv2.calcOpticalFlowFarneback(Confidence_values_decay, decay_map, None, 0.5, 3, 15, 3, 5, 1.2, 0)
     # Downsample the flow field for quiver
     fx = flow[::step, ::step, 0] * scale_factor
     fy = flow[::step, ::step, 1] * scale_factor
 
     quiver.set_UVC(fx.ravel(), fy.ravel())
+    quiver2.set_UVC(fx.ravel(), fy.ravel())
 
 
     # Update previous
     prev_filtered_binary_conv = filtered_binary_conv.copy()
     prev_buffered_binary = buffered_binary.copy()
+    Confidence_values_decay = decay_map.copy()
 
     # Update plots
     im0.set_data(buffered_binary)
     axs[0].set_title(f"Buffered Binary Frame\nFrame {frame_index}")
 
-    im1.set_data(decay_rgb)
+    im1.set_data(decay_map)
     axs[1].set_title(f"Decay map up to {frame_index}")
 
     im3.set_data(buffered_binary_conv)
@@ -135,11 +151,13 @@ def on_key(event):
     quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
     quiver.set_UVC(fx.ravel(), fy.ravel())
 
-    im4.set_data(filtered_binary_conv)
-    axs[4].set_title("Filtered Occupancy Map\nFiltering: ACTIVE")
+    im4.set_data(Confidence_values_conv)
+    axs[4].set_title("Confidence Values \n from Convolution on (Current Frame)")
+    quiver2.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
+    quiver2.set_UVC(fx.ravel(), fy.ravel())
 
-    im5.set_data(change_map)
-    axs[5].set_title("Change in Filtered Map")
+    im5.set_data(filtered_binary_conv)
+    axs[5].set_title("Filtered Occupancy Map\nFiltering: ACTIVE")
 
     fig.canvas.draw_idle()
     frame_index += 1

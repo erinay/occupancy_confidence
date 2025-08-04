@@ -6,7 +6,7 @@ from utils import Filtered_Occupancy, Filtered_Occupancy_Convolution
 
 
 # Load the CSV file containing occupancy data
-df = pd.read_csv("_intensity_map.csv")
+df = pd.read_csv("data/mEnv_mRobf/_map_convert.csv")
 
 # Set these to your data dimensions
 HEIGHT = 120  # example height
@@ -59,21 +59,22 @@ while True:
         occupancy_arr = np.array(values).reshape(HEIGHT, WIDTH)
         buffered_binary = ndimage.binary_dilation(occupancy_arr, iterations=1).astype(occupancy_arr.dtype)
         # buffered_binary = (occupancy_arr > 0).astype(int)  # Convert to binary occupancy map
+        # buffered_binary=occupancy_arr
         # Append the current binary frame to the buffer
         BUFFERED_BINARY_FRAMES.append(buffered_binary)
-
+        
         # If buffer exceeds N_frames, pop the oldest frame and filter
         # Use the last N frames to smooth/stabilize
         if len(BUFFERED_BINARY_FRAMES) > N_frames:
             BUFFERED_BINARY_FRAMES.pop(0)
             Confidence_values, filtered_binary = Filtered_Occupancy(BUFFERED_BINARY_FRAMES, N_frames)
-            buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames)
+            buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames,q_rel=None)
             enough_frames = 1
         else:
             # If not enough frames, use the current buffered binary as both confidence and filtered
             # This will show the current state without filtering
             Confidence_values, filtered_binary = buffered_binary, buffered_binary
-            buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames)
+            buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames,q_rel=None)
             enough_frames = 0
 
         # Update images data and titles
