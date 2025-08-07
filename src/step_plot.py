@@ -10,12 +10,12 @@ from scipy.spatial.transform import Rotation as R
 import re
 
 # Load data
+# df = pd.read_csv("data/accum_hits/_intensity_map.csv")
 df = pd.read_csv("data/mEnv_mRobf/_map_convert.csv")
-# df2 = pd.read_csv("data/sENv_mRob/_imu.csv")
 
 HEIGHT, WIDTH, N_frames = 120, 120, 5
 step=2
-scale_factor=1e4*2.5
+scale_factor=1e4*5
 # scale_factor=1e2
 y_quiv, x_quiv = np.mgrid[0:HEIGHT:step, 0:WIDTH:step]
 
@@ -30,7 +30,7 @@ fig, axs = plt.subplots(2,3, figsize=(15, 8))
 axs = axs.flatten()
 
 im0 = axs[0].imshow(np.zeros((HEIGHT, WIDTH)), cmap='gray', vmin=0, vmax=1, origin='lower')
-im1 = axs[1].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', vmin=0, vmax=25.0, origin='lower')
+im1 = axs[1].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', vmin=0, vmax=3, origin='lower')
 # im2 = axs[2].imshow(np.zeros((HEIGHT, WIDTH)), cmap='hot', vmin=0, vmax=25.0, origin='lower')
 im3 = axs[3].imshow(np.zeros((HEIGHT, WIDTH)), cmap='viridis', vmin=0, vmax=3, origin='lower')
 im2 = axs[2].imshow(np.zeros((HEIGHT,WIDTH)), origin='lower')
@@ -96,7 +96,8 @@ def on_key(event):
     else:
         buffered_binary_conv, Confidence_values_conv, filtered_binary_conv = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, q_rel)
         status = "INACTIVE"
-    decay_map = decay_occupancy(buffered_binary_conv, Confidence_values_decay, q_rel, decay_rate=0.85)
+    decay_map = decay_occupancy(buffered_binary_conv, Confidence_values_decay, q_rel, decay_rate=0.95)
+    # decay_map_bin = (decay_map>=0.01).astype(int)
     # Draw circles on decay map at pixels with value in [3.0, 3.5]
     circle_radius = 5
     decay_circle_overlay = np.zeros((HEIGHT, WIDTH, 3))  # RGB overlay to draw circles
@@ -123,7 +124,7 @@ def on_key(event):
     change_map[unchanged] = [1, 1, 1]   # White: still occupied
     
     # Optical Flow
-    flow = cv2.calcOpticalFlowFarneback(Confidence_values_decay, decay_map, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    flow = cv2.calcOpticalFlowFarneback(Confidence_values_decay, Confidence_values_conv, None, 0.5, 3, 15, 3, 5, 1.2, 0)
     # Downsample the flow field for quiver
     fx = flow[::step, ::step, 0] * scale_factor
     fy = flow[::step, ::step, 1] * scale_factor
@@ -135,7 +136,7 @@ def on_key(event):
     # Update previous
     prev_filtered_binary_conv = filtered_binary_conv.copy()
     prev_buffered_binary = buffered_binary.copy()
-    Confidence_values_decay = decay_map.copy()
+    Confidence_values_decay = Confidence_values_conv.copy()
 
     # Update plots
     im0.set_data(buffered_binary)

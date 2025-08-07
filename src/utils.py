@@ -98,6 +98,26 @@ def create_square_decay_kernel(kernel_size=3, decay=0.2):
 
     return kernel
 
+def decay_masked(pc_data, occupancy_map, visibility_mask, q_rel, decay_rate=0.5,decay_rate_background=0.95):
+    if q_rel!=None:
+        occupancy_map_tf = rotate_occupancy_map(occupancy_map, q_rel, verbose=True)
+    else: 
+        occupancy_map_tf = occupancy_map
+
+    # Grow visibility mask area
+    kernel = np.ones((30, 30), np.uint8)  # 5x5 square kernel
+    grown_mask = ndimage.convolve(visibility_mask.astype(np.uint8), kernel,  mode='constant', cval=0.0).astype(bool)
+    background_mask = ~grown_mask
+
+    if np.count_nonzero(grown_mask)>0:
+        occupancy_map_tf[grown_mask] *= decay_rate
+        occupancy_map_tf[grown_mask] += pc_data.astype(float)[grown_mask]
+    
+    occupancy_map[background_mask]*=decay_rate_background
+    # print(np.amax(occupancy_map))
+
+    return occupancy_map_tf
+
 def decay_occupancy(pc_data, occupancy_map, q_rel, decay_rate=0.5, alpha=1.0):
     if q_rel!=None:
         occupancy_map_tf = rotate_occupancy_map(occupancy_map, q_rel, verbose=True)
@@ -105,7 +125,6 @@ def decay_occupancy(pc_data, occupancy_map, q_rel, decay_rate=0.5, alpha=1.0):
         occupancy_map_tf = occupancy_map
     occupancy_map_tf *= decay_rate
     occupancy_map_tf += pc_data.astype(float)
-    # print(np.amax(occupancy_map))
 
     return occupancy_map_tf
 
@@ -212,7 +231,3 @@ def evolve(occupancy_map, flow, dt=0.02):
     coords = np.stack([y_new.ravel(), x_new.ravel()])
     propagated_map = map_coordinates(occupancy_map, coords, order=1, mode='constant', cval=0.0)
     return propagated_map.reshape(H, W)
-    
-
-
-## TODO: Run decay function!! what does it look like, can i use this data to inform confidence with the convolution steps?
