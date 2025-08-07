@@ -55,7 +55,7 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_
     sig1 = 1 - np.exp(-beta1 * buffered_binary_conv) # sigmoid
     mask1 = buffered_binary_conv > Th
 
-    C_plus = 1.0  # Confidence boost for strong responses
+    C_plus = 2.0  # Confidence boost for strong responses
     Confidence_values[mask1] = (1 - sig1[mask1]) * C_old_tf[mask1] + sig1[mask1] * C_plus  # Boost strong responses
 
     # Decrease confidence in regions with below_convolution_threshold
@@ -64,7 +64,7 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_
     sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
     mask2 = buffered_binary_conv <= Th
     
-    C_minus = 0.0 # Confidence reduction for weak responses`
+    C_minus = -0.25 # Confidence reduction for weak responses`
     # Confidence_values[mask2] = (1 - sig[mask2]) * C_old[mask2] + sig[mask2] * C_minus  
     Confidence_values[mask2] = (1 - sig2) * C_old_tf[mask2] + sig2 * C_minus  
     
@@ -117,6 +117,52 @@ def decay_masked(pc_data, occupancy_map, visibility_mask, q_rel, decay_rate=0.5,
     # print(np.amax(occupancy_map))
 
     return occupancy_map_tf
+
+def decay_mask_convolution(occupancy_data, C_old, q_rel=None):
+    if q_rel!=None:
+        C_old_tf = rotate_occupancy_map(C_old, q_rel)
+        Confidence_values = np.copy(C_old_tf)
+    else: 
+        C_old_tf = C_old
+        Confidence_values = np.copy(C_old)
+    # Buffered binary convolution
+    kernel = create_square_decay_kernel(kernel_size=5, decay=0.2)
+    buffered_binary_conv = ndimage.convolve(occupancy_data, kernel, mode='constant', cval=0.0)
+    
+    # Grow visibility mask area
+    visibility_mask = (buffered_binary_conv>0)
+    kernel = np.ones((30, 30), np.uint8)  # 5x5 square kernel
+    grown_mask = ndimage.convolve(visibility_mask.astype(np.uint8), kernel,  mode='constant', cval=0.0).astype(bool)
+    background_mask = ~grown_mask
+
+    # Increase confidence in regions with  above_convolution_threshold
+    Th = 1.0  # Convolution Threshold for strong responses
+    # Increase confidence in regions with  above_convolution_threshold
+    beta1 = 0.1
+    sig1 = 1 - np.exp(-beta1 * buffered_binary_conv) # sigmoid
+    mask1 = buffered_binary_conv > Th
+    C_plus = 2.0  # Confidence boost for strong responses
+    Confidence_values[mask1] = (1 - sig1[mask1]) * C_old_tf[mask1] + sig1[mask1] * C_plus  # Boost strong responses
+
+    # Decrease confidence in regions with below_convolution_threshold & inside visbility mask
+    beta2 = 0.5
+    k = 0.5
+    sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
+    print(sig2)
+    mask2 = (buffered_binary_conv <= Th) & grown_mask
+    
+    C_minus = -1 # Confidence reduction for weak responses`
+    Confidence_values[mask2] = (1 - sig2) * C_old_tf[mask2] + sig2 * C_minus  
+    
+    # Decrase confidence in regions in background by lesser amount
+    C_minus = 0.0 # Confidence reduction for weak responses`
+    beta2 = 0.8
+    k = 0.8
+    sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
+    sig2 = 0.05
+    Confidence_values[background_mask] = (1 - sig2) * C_old_tf[background_mask]   
+    
+    return Confidence_values    
 
 def decay_occupancy(pc_data, occupancy_map, q_rel, decay_rate=0.5, alpha=1.0):
     if q_rel!=None:

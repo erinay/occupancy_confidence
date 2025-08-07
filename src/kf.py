@@ -29,8 +29,8 @@ im3 = axs[3].imshow(np.zeros((HEIGHT,WIDTH)), cmap='hot', vmin=0, vmax=3,  origi
 
 im4 = axs[4].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # convolution
 im5 = axs[5].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') # overlay velocity from "convolution"
-im6 = axs[6].imshow(np.zeros((HEIGHT,WIDTH)), cmap='gray', vmin=0, vmax=1,  origin='lower') # predict next map
-im7 = axs[7].imshow(np.zeros((HEIGHT,WIDTH)), cmap='gray', vmin=0, vmax=1,  origin='lower') #  combine
+im6 = axs[6].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') # predict next map
+im7 = axs[7].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') #  combine
 
 fig.colorbar(im3, ax=axs[3], fraction=0.046, pad=0.04)
 fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
@@ -56,9 +56,10 @@ prev_convolution = np.zeros((HEIGHT,WIDTH))
 # necessary for current function definitions (i think?, i.e. not necessarily used)
 Confidence_values_conv = np.zeros((HEIGHT, WIDTH))
 Confidence_values_decay = np.zeros((HEIGHT, WIDTH))  # Initialize confidence values for convolution
+confidence_combined = np.zeros((HEIGHT,WIDTH))
 
 def on_key(event):
-    global frame_index, BUFFERED_BINARY_FRAMES, prev_buffered_binary, prev_convolution, Confidence_values_conv, Confidence_values_decay
+    global frame_index, BUFFERED_BINARY_FRAMES, prev_buffered_binary, prev_convolution, Confidence_values_conv, Confidence_values_decay, confidence_combined
 
     if event.key != 'right':
         return
@@ -83,12 +84,15 @@ def on_key(event):
         BUFFERED_BINARY_FRAMES.pop(0)
 
     C_old_conv = Confidence_values_conv
+    C_old_comb = confidence_combined
 
     if len(BUFFERED_BINARY_FRAMES) >= N_frames:
         buffered_binary_conv, Confidence_values_conv, _ = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, None)
         status = "ACTIVE"
+        confidence_combined = decay_mask_convolution(buffered_binary, C_old_comb)
     else:
         buffered_binary_conv, Confidence_values_conv, _ = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, None)
+        confidence_combined = decay_mask_convolution(buffered_binary, C_old_comb)
         status = "INACTIVE"
 
     visibility_t1 = (buffered_binary_conv > 0)
@@ -128,7 +132,7 @@ def on_key(event):
     # im3.set_data(predicted_map)
     # axs[3].set_title(f"Estimated occupancy at frame {frame_index}")
 
-    # Playing with occupancy map
+    # Playing with masking for optical flow
     im0.set_data(buffered_binary)
     axs[0].set_title(f"Buffered Binary Frame\nFrame {frame_index}")
     im1.set_data(Confidence_values_conv)
@@ -138,18 +142,28 @@ def on_key(event):
     im3.set_data(Confidence_values_conv)
     quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
     quiver.set_UVC(fx.ravel(), fy.ravel())
-    axs[4].set_title("Applied optical flow")
+    axs[3].set_title("Applied optical flow")
 
-    im4.set_data(buffered_binary_conv)
-    axs[4].set_title(f"Convoluted Binary Frame\nFrame {frame_index}")
-    im5.set_data(buffered_binary_conv)
-    quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
-    quiver.set_UVC(fx.ravel(), fy.ravel())
-    im6.set_data(predicted_map)
-    axs[6].set_title(f"Predicted map at frame {frame_index}")
-    im7.set_data(predicted_map)
-    axs[7].set_title(f"Estimated occupancy at frame {frame_index}")
-    print(frame_index)
+    # Comparing decay
+    im4.set_data(buffered_binary)
+    axs[4].set_title(f"Buffered Binary Frame\nFrame {frame_index}")
+    im5.set_data(Confidence_values_conv)
+    axs[5].set_title(f"Convolution Confidence Frame\nFrame {frame_index}")
+    im6.set_data(decay_map)
+    axs[6].set_title(f"Decay Map Frame\nFrame {frame_index}")
+    im7.set_data(confidence_combined)
+    axs[7].set_title(f"Convolution with Masking Frame \nFrame{frame_index}")
+    
+    # im4.set_data(buffered_binary_conv)
+    # axs[4].set_title(f"Convoluted Binary Frame\nFrame {frame_index}")
+    # im5.set_data(buffered_binary_conv)
+    # quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
+    # quiver.set_UVC(fx.ravel(), fy.ravel())
+    # im6.set_data(predicted_map)
+    # axs[6].set_title(f"Predicted map at frame {frame_index}")
+    # im7.set_data(predicted_map)
+    # axs[7].set_title(f"Estimated occupancy at frame {frame_index}")
+    # print(frame_index)
 
     fig.canvas.draw_idle()
     frame_index += 1
