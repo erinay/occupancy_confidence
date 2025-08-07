@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import ndimage
 from scipy.spatial.transform import Rotation as R
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import map_coordinates, label, center_of_mass
 
 def Filtered_Occupancy(occupancy_data, N_frames):
     """
@@ -64,7 +64,7 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_
     sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
     mask2 = buffered_binary_conv <= Th
     
-    C_minus = -0.25 # Confidence reduction for weak responses`
+    C_minus = 0# Confidence reduction for weak responses`
     # Confidence_values[mask2] = (1 - sig[mask2]) * C_old[mask2] + sig[mask2] * C_minus  
     Confidence_values[mask2] = (1 - sig2) * C_old_tf[mask2] + sig2 * C_minus  
     
@@ -148,7 +148,6 @@ def decay_mask_convolution(occupancy_data, C_old, q_rel=None):
     beta2 = 0.5
     k = 0.5
     sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
-    print(sig2)
     mask2 = (buffered_binary_conv <= Th) & grown_mask
     
     C_minus = -1 # Confidence reduction for weak responses`
@@ -257,7 +256,6 @@ def rotate_occupancy_map(occupancy_map: np.ndarray, Q_rel: R, verbose=False) -> 
 
     return rotated
 
-
 def evolve(occupancy_map, flow, dt=0.02):
     '''
     Estimates next confidence map at next time-step
@@ -277,3 +275,49 @@ def evolve(occupancy_map, flow, dt=0.02):
     coords = np.stack([y_new.ravel(), x_new.ravel()])
     propagated_map = map_coordinates(occupancy_map, coords, order=1, mode='constant', cval=0.0)
     return propagated_map.reshape(H, W)
+
+def update(predicted_map, observed_map, alpha=0.8):
+    belief_map =  alpha*predicted_map+(1-alpha)*observed_map
+    return belief_map
+
+def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.01, speed_threshold=0.0001):
+    speed = np.hypot(vx_s, vy_s)
+
+    # Build mask of valid cells
+    mask = (confidence_map >= conf_threshold) & (speed >= speed_threshold)
+
+    # If mask is empty, return empty list immediately
+    if np.sum(mask) == 0:
+        return []
+
+    # Connected components labeling (8-connectivity)
+    structure = np.ones((3,3), dtype=int)
+    labels, num_labels = label(mask, structure=structure)
+    if num_labels == 0:
+        return []
+    print(num_labels)
+    blobs = []
+    for lab in range(1, num_labels + 1):
+        region_mask = (labels == lab)
+        conf_region = confidence_map[region_mask]
+        weight_sum = np.sum(conf_region)
+
+        if weight_sum == 0:
+            continue  # skip zero-confidence blobs
+
+        vx_region = vx_s[region_mask]
+        vy_region = vy_s[region_mask]
+
+        avg_vx = np.sum(vx_region * conf_region) / weight_sum
+        avg_vy = np.sum(vy_region * conf_region) / weight_sum
+
+        centroid = center_of_mass(region_mask)
+
+        blobs.append({
+            'centroid': centroid,
+            'avg_vx': avg_vx,
+            'avg_vy': avg_vy,
+            'size': np.sum(region_mask),
+        })
+
+    return blobs
