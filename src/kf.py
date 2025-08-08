@@ -12,7 +12,7 @@ from decay_process import *
 from scipy.ndimage import uniform_filter
 
 # Load data
-df = pd.read_csv("data/mEnv_mRobf/_map_convert.csv")
+df = pd.read_csv("data/run0/_map_convert.csv")
 
 HEIGHT, WIDTH, N_frames = 120, 120, 5
 step=1
@@ -57,9 +57,11 @@ prev_convolution = np.zeros((HEIGHT,WIDTH))
 Confidence_values_conv = np.zeros((HEIGHT, WIDTH))
 Confidence_values_decay = np.zeros((HEIGHT, WIDTH))  # Initialize confidence values for convolution
 confidence_combined = np.zeros((HEIGHT,WIDTH))
+tracked_clusters = []
+next_track_id = 0
 
 def on_key(event):
-    global frame_index, BUFFERED_BINARY_FRAMES, prev_buffered_binary, prev_convolution, Confidence_values_conv, Confidence_values_decay, confidence_combined
+    global frame_index, BUFFERED_BINARY_FRAMES, prev_buffered_binary, prev_convolution, Confidence_values_conv, Confidence_values_decay, confidence_combined, tracked_clusters, next_track_id
 
     if event.key != 'right':
         return
@@ -87,26 +89,26 @@ def on_key(event):
     C_old_comb = confidence_combined
 
     if len(BUFFERED_BINARY_FRAMES) >= N_frames:
-        buffered_binary_conv, Confidence_values_conv, _ = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, None)
+        buffered_binary_conv, Confidence_values_conv, _ = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv)
         status = "ACTIVE"
         confidence_combined = decay_mask_convolution(buffered_binary, C_old_comb)
     else:
-        buffered_binary_conv, Confidence_values_conv, _ = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv, N_frames, None)
+        buffered_binary_conv, Confidence_values_conv, _ = Filtered_Occupancy_Convolution(BUFFERED_BINARY_FRAMES, C_old_conv)
         confidence_combined = decay_mask_convolution(buffered_binary, C_old_comb)
         status = "INACTIVE"
 
     visibility_t1 = (buffered_binary_conv > 0)
     
     # Create masks to apply optical flow on
-    masked_confidence = np.where(visibility_t1, Confidence_values_conv, 0).astype(np.float32)
+    # masked_confidence = np.where(visibility_t1, Confidence_values_conv, 0).astype(np.float32)
     
     # Optical Flow
     normed_buffered_conv = buffered_binary_conv/3
     flow = cv2.calcOpticalFlowFarneback(Confidence_values_conv, normed_buffered_conv, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-    decay_map = decay_masked(normed_buffered_conv, Confidence_values_decay, visibility_t1, None, decay_rate=0.7)
+    decay_map = decay_masked(normed_buffered_conv, Confidence_values_decay, visibility_t1, decay_rate=0.7)
 
     # # Try gaussian Filter
-    # vx = gaussian_filter(flow[::1, ::1, 0], sigma=1)
+    # vx = gaussian_filter(flow[::, ::, 0], sigma=1)
     # vy = gaussian_filter(flow[::, ::, 1], sigma=1)
     # Averaging with square filter
     kernel_size = 5
@@ -121,7 +123,7 @@ def on_key(event):
 
     speed = np.hypot(vx, vy)
     print("Confidence map min/max:", Confidence_values_conv.min(), Confidence_values_conv.max())    # 2) Connected components labeling
-    print("Confidence map min/max:", speed.min(), speed.max())    # 2) Connected components labeling
+    print("Speed map min/max:", speed.min(), speed.max())    # 2) Connected components labeling
 
 
 
@@ -142,7 +144,8 @@ def on_key(event):
         quiver2.set_UVC(fx,fy)
 
     # Evolve map
-    evolve(buffered_binary, blobs, Confidence_values_conv)
+    predicted_map = evolve(Confidence_values_conv, labels, blobs, 10000)
+    # tracked_clusters = update_tracks(blobs, frame_index, tracked_clusters, next_track_id)
 
     # Update previous
     prev_buffered_binary = buffered_binary.copy()
@@ -165,8 +168,8 @@ def on_key(event):
     axs[0].set_title(f"Buffered Binary Frame\nFrame {frame_index}")
     im1.set_data(Confidence_values_conv)
     axs[1].set_title(f"Confidence Values from Convolution on frame {frame_index}")
-    im2.set_data(masked_confidence)
-    axs[2].set_title("Masked Confidence Map")
+    # im2.set_data(masked_confidence)
+    # axs[2].set_title("Masked Confidence Map")
     im3.set_data(Confidence_values_conv)
     quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
     quiver.set_UVC(fx.ravel(), fy.ravel())
@@ -177,9 +180,22 @@ def on_key(event):
     num_clusters = labels.max()
     im4.set_clim(0, max(num_clusters, 1))  
     axs[4].set_title(f"Clusters and their velocities in Frame {frame_index}\n *velocity vector scaled up for ease of viewing")
-    # im5.set_data(Confidence_values_conv)
-    # axs[5].set_title(f"Convoluted Binary Frame\nFrame {frame_index}")
-    # im6.set_data(predicted_map)
+    axs[5].imshow(predicted_map, cmap='viridis', origin='lower')
+    axs[5].imshow(Confidence_values_conv, cmap='Reds', origin='lower', alpha=0.4)  # translucent overlay
+
+    # label_overlay = np.zeros((HEIGHT, WIDTH), dtype=int)
+    # print(len(tracked_clusters))
+    # for i, track in enumerate(tracked_clusters, start=1):
+    #     if track['label_mask'] is not None:
+    #         label_overlay[track['label_mask']] = i  # assign cluster ID
+
+    # # Use a colormap with distinct colors (e.g. 'tab20' or 'tab20b')
+    # im6.set_data(label_overlay)
+    # im6.set_cmap('tab20')
+    # im6.set_clim(0, max(20, len(tracked_clusters)))  # adjust max to your max cluster ID
+    # plt.draw()
+
+        # im6.set_data(predicted_map)
     # axs[6].set_title(f"Predicted map at frame {frame_index}")
     # im7.set_data(predicted_map)
     # axs[7].set_title(f"Estimated occupancy at frame {frame_index}")

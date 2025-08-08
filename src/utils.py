@@ -3,6 +3,7 @@ from scipy import ndimage
 from scipy.spatial.transform import Rotation as R
 from scipy.ndimage import map_coordinates, label, center_of_mass
 import matplotlib.pyplot as plt
+from scipy.optimize import linear_sum_assignment
 
 def Filtered_Occupancy(occupancy_data, N_frames):
     """
@@ -24,7 +25,7 @@ def Filtered_Occupancy(occupancy_data, N_frames):
 
 
 
-def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_rings=1, decay=0.2):
+def Filtered_Occupancy_Convolution(occupancy_data,  C_old, num_rings=1, decay=0.2):
     """
     Applies convolution-based filtering to reduce flickering in binary occupancy maps.
 
@@ -39,13 +40,8 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_
     """
     occupancy_map = occupancy_data[-1]
     kernel = create_square_decay_kernel(kernel_size=5, decay=0.2)
-    # TF old points to current frame
-    if q_rel!=None:
-        C_old_tf = rotate_occupancy_map(C_old, q_rel)
-        Confidence_values = np.copy(C_old_tf)
-    else: 
-        C_old_tf = C_old
-        Confidence_values = np.copy(C_old)
+    # TF old points to current frame 
+    Confidence_values = np.copy(C_old)
 
     # Convolve the occupancy map with the kernel
     buffered_binary_conv = ndimage.convolve(occupancy_map, kernel, mode='constant', cval=0.0)
@@ -57,7 +53,7 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_
     mask1 = buffered_binary_conv > Th
 
     C_plus = 2.0  # Confidence boost for strong responses
-    Confidence_values[mask1] = (1 - sig1[mask1]) * C_old_tf[mask1] + sig1[mask1] * C_plus  # Boost strong responses
+    Confidence_values[mask1] = (1 - sig1[mask1]) * C_old[mask1] + sig1[mask1] * C_plus  # Boost strong responses
 
     # Decrease confidence in regions with below_convolution_threshold
     beta2 = 0.5
@@ -67,7 +63,7 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, N_frames, q_rel, num_
     
     C_minus = 0# Confidence reduction for weak responses`
     # Confidence_values[mask2] = (1 - sig[mask2]) * C_old[mask2] + sig[mask2] * C_minus  
-    Confidence_values[mask2] = (1 - sig2) * C_old_tf[mask2] + sig2 * C_minus  
+    Confidence_values[mask2] = (1 - sig2) * C_old[mask2] + sig2 * C_minus  
     
     # Normalize and threshold
     filtered_occupancy = (Confidence_values >= 0.01).astype(int)
@@ -99,33 +95,23 @@ def create_square_decay_kernel(kernel_size=3, decay=0.2):
 
     return kernel
 
-def decay_masked(pc_data, occupancy_map, visibility_mask, q_rel, decay_rate=0.5,decay_rate_background=0.95):
-    if q_rel!=None:
-        occupancy_map_tf = rotate_occupancy_map(occupancy_map, q_rel, verbose=True)
-    else: 
-        occupancy_map_tf = occupancy_map
-
+def decay_masked(pc_data, occupancy_map, visibility_mask, decay_rate=0.5,decay_rate_background=0.95):
     # Grow visibility mask area
     kernel = np.ones((30, 30), np.uint8)  # 5x5 square kernel
     grown_mask = ndimage.convolve(visibility_mask.astype(np.uint8), kernel,  mode='constant', cval=0.0).astype(bool)
     background_mask = ~grown_mask
 
     if np.count_nonzero(grown_mask)>0:
-        occupancy_map_tf[grown_mask] *= decay_rate
-        occupancy_map_tf[grown_mask] += pc_data.astype(float)[grown_mask]
+        occupancy_map[grown_mask] *= decay_rate
+        occupancy_map[grown_mask] += pc_data.astype(float)[grown_mask]
     
     occupancy_map[background_mask]*=decay_rate_background
     # print(np.amax(occupancy_map))
 
-    return occupancy_map_tf
+    return occupancy_map
 
-def decay_mask_convolution(occupancy_data, C_old, q_rel=None):
-    if q_rel!=None:
-        C_old_tf = rotate_occupancy_map(C_old, q_rel)
-        Confidence_values = np.copy(C_old_tf)
-    else: 
-        C_old_tf = C_old
-        Confidence_values = np.copy(C_old)
+def decay_mask_convolution(occupancy_data, C_old):
+    Confidence_values = np.copy(C_old)
     # Buffered binary convolution
     kernel = create_square_decay_kernel(kernel_size=5, decay=0.2)
     buffered_binary_conv = ndimage.convolve(occupancy_data, kernel, mode='constant', cval=0.0)
@@ -143,7 +129,7 @@ def decay_mask_convolution(occupancy_data, C_old, q_rel=None):
     sig1 = 1 - np.exp(-beta1 * buffered_binary_conv) # sigmoid
     mask1 = buffered_binary_conv > Th
     C_plus = 2.0  # Confidence boost for strong responses
-    Confidence_values[mask1] = (1 - sig1[mask1]) * C_old_tf[mask1] + sig1[mask1] * C_plus  # Boost strong responses
+    Confidence_values[mask1] = (1 - sig1[mask1]) * C_old[mask1] + sig1[mask1] * C_plus  # Boost strong responses
 
     # Decrease confidence in regions with below_convolution_threshold & inside visbility mask
     beta2 = 0.5
@@ -152,7 +138,7 @@ def decay_mask_convolution(occupancy_data, C_old, q_rel=None):
     mask2 = (buffered_binary_conv <= Th) & grown_mask
     
     C_minus = -1 # Confidence reduction for weak responses`
-    Confidence_values[mask2] = (1 - sig2) * C_old_tf[mask2] + sig2 * C_minus  
+    Confidence_values[mask2] = (1 - sig2) * C_old[mask2] + sig2 * C_minus  
     
     # Decrase confidence in regions in background by lesser amount
     C_minus = 0.0 # Confidence reduction for weak responses`
@@ -160,19 +146,15 @@ def decay_mask_convolution(occupancy_data, C_old, q_rel=None):
     k = 0.8
     sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
     sig2 = 0.05
-    Confidence_values[background_mask] = (1 - sig2) * C_old_tf[background_mask]   
+    Confidence_values[background_mask] = (1 - sig2) * C_old[background_mask]   
     
     return Confidence_values    
 
-def decay_occupancy(pc_data, occupancy_map, q_rel, decay_rate=0.5, alpha=1.0):
-    if q_rel!=None:
-        occupancy_map_tf = rotate_occupancy_map(occupancy_map, q_rel, verbose=True)
-    else: 
-        occupancy_map_tf = occupancy_map
-    occupancy_map_tf *= decay_rate
-    occupancy_map_tf += pc_data.astype(float)
+def decay_occupancy(pc_data, occupancy_map, decay_rate=0.5, alpha=1.0):
+    occupancy_map *= decay_rate
+    occupancy_map += pc_data.astype(float)
 
-    return occupancy_map_tf
+    return occupancy_map
 
 def interpolate_pose(imu_poses, target_time):
     """
@@ -257,60 +239,50 @@ def rotate_occupancy_map(occupancy_map: np.ndarray, Q_rel: R, verbose=False) -> 
 
     return rotated
 
-def evolve(occupancy_map, blobs, confidence_map, dt=0.02):
+def evolve(confidence_map, labels, blobs, dt=0.02):
     '''
     Estimates next confidence map at next time-step
     '''
-    H,W = occupancy_map.shape
-    predicted_map = np.zeros_like(occupancy_map)
+    H,W = confidence_map.shape
+    predicted_map = np.zeros_like(confidence_map)
 
-    # num_labels = labels.max()
+    for lab, blob in enumerate(blobs, start=1):
+        cluster_mask = (labels == lab)
+        if cluster_mask.sum() == 0:
+            continue
 
-    # for lab in range(1, num_labels + 1):
-    #     cluster_mask = (labels == lab)
-    #     if cluster_mask.sum() == 0:
-    #         continue
+        avg_vx = blob['avg_vx']
+        avg_vy = blob['avg_vy']
 
-    #     conf_region = confidence_map[cluster_mask]
-    #     weight_sum = np.sum(conf_region)
-    #     if weight_sum == 0:
-    #         continue
+        ys, xs = np.nonzero(cluster_mask)
 
-    #     vx_region = vx[cluster_mask]
-    #     vy_region = vy[cluster_mask]
+        # Compute new positions
+        xs_new = xs + avg_vx * dt +0.5
+        ys_new = ys + avg_vy * dt +0.5
 
-    #     avg_vx = np.sum(vx_region * conf_region) / weight_sum
-    #     avg_vy = np.sum(vy_region * conf_region) / weight_sum
+        # Round and clip to grid
+        xs_int = np.clip(np.round(xs_new).astype(int), 0, W - 1)
+        ys_int = np.clip(np.round(ys_new).astype(int), 0, H - 1)
 
-    #     ys, xs = np.nonzero(cluster_mask)
+        # Scatter occupancy values into new map
+        np.add.at(predicted_map, (ys_int, xs_int), confidence_map[ys, xs])
 
-    #     # Compute new positions (floating point)
-    #     xs_new = xs + avg_vx * dt
-    #     ys_new = ys + avg_vy * dt
+    # Clip to valid range [0,1]
+    predicted_map = np.clip(predicted_map, 0, 1)
 
-    #     # Round to nearest grid cell, clamp to bounds
-    #     xs_int = np.clip(np.round(xs_new).astype(int), 0, W - 1)
-    #     ys_int = np.clip(np.round(ys_new).astype(int), 0, H - 1)
-
-    #     # Add occupancy values to new_map at new positions
-    #     np.add.at(predicted_map, (ys_int, xs_int), occupancy_map[ys, xs])
-
-    # # Clip values to valid range (assuming occupancy values in [0,1])
-    # predicted_map = np.clip(predicted_map, 0, 1)
-
-    # return predicted_map
+    return predicted_map
 
 def update(predicted_map, observed_map, alpha=0.8):
     belief_map =  alpha*predicted_map+(1-alpha)*observed_map
     return belief_map
 
-def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.01, speed_threshold=0.0001):
+def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.05, speed_threshold=0.0001):
     speed = np.hypot(vx_s, vy_s)
     H,W = confidence_map.shape
     labels = np.zeros((H,W))
 
     # Build mask of valid cells
-    mask = (confidence_map >= conf_threshold) & (speed >= speed_threshold)
+    mask = (confidence_map >= conf_threshold) #& (speed >= 0.0001)
 
     # If mask is empty, return empty list immediately
     if np.sum(mask) == 0:
@@ -343,6 +315,54 @@ def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.01, speed_thre
             'avg_vx': avg_vx,
             'avg_vy': avg_vy,
             'size': np.sum(region_mask),
+            'label_mask': region_mask
         })
 
     return labels, blobs
+
+## Cluster Tracking
+def update_tracks(detected_blobs, frame_num, tracked_clusters, next_track_id, dt=0.02, max_dist=1.0):
+    assigned_blobs = set()
+    assigned_tracks = set()
+
+    for i, track in enumerate(tracked_clusters):
+        min_dist = float('inf')
+        min_j = None
+        for j, blob in enumerate(detected_blobs):
+            if j in assigned_blobs:
+                continue
+            dist = np.linalg.norm(np.array(track['centroid']) - np.array(blob['centroid']))
+            if dist < min_dist:
+                min_dist = dist
+                min_j = j
+
+        if min_j is not None and min_dist < max_dist:
+            blob = detected_blobs[min_j]
+            track['centroid'] = blob['centroid']
+            track['avg_vx'] = blob['avg_vx']
+            track['avg_vy'] = blob['avg_vy']
+            track['size'] = blob['size']
+            track['last_seen'] = frame_num
+            track['missed'] = 0
+            assigned_blobs.add(min_j)
+            assigned_tracks.add(i)
+        else:
+            x, y = track['centroid']
+            vx, vy = track['avg_vx'], track['avg_vy']
+            predicted_centroid = (x + vx * dt, y + vy * dt)
+            track['centroid'] = predicted_centroid
+            track['missed'] += 1
+
+    tracked_clusters[:] = [t for t in tracked_clusters if t['missed'] <= 5]
+
+    for j, blob in enumerate(detected_blobs):
+        if j not in assigned_blobs:
+            blob['last_seen'] = frame_num
+            blob['missed'] = 0
+            blob['track_id'] = next_track_id  # assign unique ID here
+            next_track_id += 1
+            tracked_clusters.append(blob)
+
+    return tracked_clusters, next_track_id
+
+
