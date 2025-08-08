@@ -2,6 +2,7 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial.transform import Rotation as R
 from scipy.ndimage import map_coordinates, label, center_of_mass
+import matplotlib.pyplot as plt
 
 def Filtered_Occupancy(occupancy_data, N_frames):
     """
@@ -256,25 +257,48 @@ def rotate_occupancy_map(occupancy_map: np.ndarray, Q_rel: R, verbose=False) -> 
 
     return rotated
 
-def evolve(occupancy_map, flow, dt=0.02):
+def evolve(occupancy_map, blobs, confidence_map, dt=0.02):
     '''
     Estimates next confidence map at next time-step
     '''
     H,W = occupancy_map.shape
-    fx = flow[:, :, 0]
-    fy = flow[:, :, 1]
+    predicted_map = np.zeros_like(occupancy_map)
 
-    # Create a grid of pixel indices
-    y, x = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+    # num_labels = labels.max()
 
-    # New (x, y) positions after dt
-    x_new = x + fx * dt
-    y_new = y + fy * dt
+    # for lab in range(1, num_labels + 1):
+    #     cluster_mask = (labels == lab)
+    #     if cluster_mask.sum() == 0:
+    #         continue
 
-    # Sample map_t at new positions (backward warping)
-    coords = np.stack([y_new.ravel(), x_new.ravel()])
-    propagated_map = map_coordinates(occupancy_map, coords, order=1, mode='constant', cval=0.0)
-    return propagated_map.reshape(H, W)
+    #     conf_region = confidence_map[cluster_mask]
+    #     weight_sum = np.sum(conf_region)
+    #     if weight_sum == 0:
+    #         continue
+
+    #     vx_region = vx[cluster_mask]
+    #     vy_region = vy[cluster_mask]
+
+    #     avg_vx = np.sum(vx_region * conf_region) / weight_sum
+    #     avg_vy = np.sum(vy_region * conf_region) / weight_sum
+
+    #     ys, xs = np.nonzero(cluster_mask)
+
+    #     # Compute new positions (floating point)
+    #     xs_new = xs + avg_vx * dt
+    #     ys_new = ys + avg_vy * dt
+
+    #     # Round to nearest grid cell, clamp to bounds
+    #     xs_int = np.clip(np.round(xs_new).astype(int), 0, W - 1)
+    #     ys_int = np.clip(np.round(ys_new).astype(int), 0, H - 1)
+
+    #     # Add occupancy values to new_map at new positions
+    #     np.add.at(predicted_map, (ys_int, xs_int), occupancy_map[ys, xs])
+
+    # # Clip values to valid range (assuming occupancy values in [0,1])
+    # predicted_map = np.clip(predicted_map, 0, 1)
+
+    # return predicted_map
 
 def update(predicted_map, observed_map, alpha=0.8):
     belief_map =  alpha*predicted_map+(1-alpha)*observed_map
@@ -282,20 +306,21 @@ def update(predicted_map, observed_map, alpha=0.8):
 
 def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.01, speed_threshold=0.0001):
     speed = np.hypot(vx_s, vy_s)
+    H,W = confidence_map.shape
+    labels = np.zeros((H,W))
 
     # Build mask of valid cells
     mask = (confidence_map >= conf_threshold) & (speed >= speed_threshold)
 
     # If mask is empty, return empty list immediately
     if np.sum(mask) == 0:
-        return []
+        return labels,[]
 
     # Connected components labeling (8-connectivity)
     structure = np.ones((3,3), dtype=int)
     labels, num_labels = label(mask, structure=structure)
     if num_labels == 0:
-        return []
-    print(num_labels)
+        return labels,[]
     blobs = []
     for lab in range(1, num_labels + 1):
         region_mask = (labels == lab)
@@ -320,4 +345,4 @@ def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.01, speed_thre
             'size': np.sum(region_mask),
         })
 
-    return blobs
+    return labels, blobs

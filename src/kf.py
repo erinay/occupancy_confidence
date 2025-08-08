@@ -28,20 +28,19 @@ im1 = axs[1].imshow(np.zeros((HEIGHT,WIDTH)), cmap='hot', vmin=0, vmax=3,  origi
 im2 = axs[2].imshow(np.zeros((HEIGHT,WIDTH)), cmap='hot', vmin=0, vmax=3,  origin='lower') # predict next map with velocity data
 im3 = axs[3].imshow(np.zeros((HEIGHT,WIDTH)), cmap='hot', vmin=0, vmax=3,  origin='lower') # combine
 
-im4 = axs[4].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # convolution
+im4 = axs[4].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=10,  origin='lower') # convolution
 im5 = axs[5].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') # overlay velocity from "convolution"
 im6 = axs[6].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') # predict next map
 im7 = axs[7].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') #  combine
 
 fig.colorbar(im3, ax=axs[3], fraction=0.046, pad=0.04)
 fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
-fig.colorbar(im4, ax=axs[4], fraction=0.046, pad=0.04)
 
 
 # Define quiver
 quiver = axs[3].quiver(x_quiv, y_quiv, np.zeros_like(x_quiv), np.zeros_like(y_quiv), 
                        color='red', scale=1, scale_units='xy', angles='xy')
-quiver2 = axs[7].quiver(x_quiv, y_quiv, np.zeros_like(x_quiv), np.zeros_like(y_quiv), 
+quiver2 = axs[4].quiver(x_quiv, y_quiv, np.zeros_like(x_quiv), np.zeros_like(y_quiv), 
                        color='red', scale=1, scale_units='xy', angles='xy')
 
 for ax in axs:
@@ -117,8 +116,6 @@ def on_key(event):
     fx = vx[::step,::step]*scale_factor
     fy = vy[::step, ::step]*scale_factor
 
-    predicted_map = evolve(buffered_binary, flow)
-
     # quiver.set_UVC(fx.ravel(), fy.ravel())
     # quiver2.set_UVC(fx.ravel(), fy.ravel())
 
@@ -129,7 +126,7 @@ def on_key(event):
 
 
     # Cluster 
-    blobs = get_motion_blobs(vx, vy, Confidence_values_conv)
+    labels, blobs = get_motion_blobs(vx, vy, Confidence_values_conv)
 
     if len(blobs) == 0:
         # No motion blobs — clear arrows or set empty data
@@ -144,7 +141,8 @@ def on_key(event):
         quiver2.set_offsets(np.stack((x_pos, y_pos), axis=-1))
         quiver2.set_UVC(fx,fy)
 
-
+    # Evolve map
+    evolve(buffered_binary, blobs, Confidence_values_conv)
 
     # Update previous
     prev_buffered_binary = buffered_binary.copy()
@@ -166,7 +164,7 @@ def on_key(event):
     im0.set_data(buffered_binary)
     axs[0].set_title(f"Buffered Binary Frame\nFrame {frame_index}")
     im1.set_data(Confidence_values_conv)
-    axs[1].set_title(f"ConfidenceValues from Convolution on frame {frame_index}")
+    axs[1].set_title(f"Confidence Values from Convolution on frame {frame_index}")
     im2.set_data(masked_confidence)
     axs[2].set_title("Masked Confidence Map")
     im3.set_data(Confidence_values_conv)
@@ -174,13 +172,13 @@ def on_key(event):
     quiver.set_UVC(fx.ravel(), fy.ravel())
     axs[3].set_title("Applied optical flow")
 
-    im7.set_data(Confidence_values_conv)
-    # im4.set_data()
-    # im4.set_data(buffered_binary_conv)
-    # axs[4].set_title(f"Convoluted Binary Frame\nFrame {frame_index}")
-    # im5.set_data(buffered_binary_conv)
-    # quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
-    # quiver.set_UVC(fx.ravel(), fy.ravel())
+    im4.set_data(labels)
+    # Suppose labels is your cluster label map (0 = background)
+    num_clusters = labels.max()
+    im4.set_clim(0, max(num_clusters, 1))  
+    axs[4].set_title(f"Clusters and their velocities in Frame {frame_index}\n *velocity vector scaled up for ease of viewing")
+    # im5.set_data(Confidence_values_conv)
+    # axs[5].set_title(f"Convoluted Binary Frame\nFrame {frame_index}")
     # im6.set_data(predicted_map)
     # axs[6].set_title(f"Predicted map at frame {frame_index}")
     # im7.set_data(predicted_map)
