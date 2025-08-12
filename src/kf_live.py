@@ -29,7 +29,7 @@ im2 = axs[2].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  o
 im3 = axs[3].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # combine
 
 im4 = axs[4].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=10,  origin='lower') # convolution
-im5 = axs[5].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') # overlay velocity from "convolution"
+im5 = axs[5].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # overlay velocity from "convolution"
 im6 = axs[6].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # predict next map
 im7 = axs[7].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') #  combine
 
@@ -53,18 +53,9 @@ prev_convolution = np.zeros((HEIGHT,WIDTH))
 # necessary for current function definitions (i think?, i.e. not necessarily used)
 Confidence_values_conv = np.zeros((HEIGHT, WIDTH))
 C_old_conv = np.zeros((HEIGHT, WIDTH))  # Initialize confidence values for convolution
-confidence_combined = np.zeros((HEIGHT,WIDTH))
 
-def on_key(event):
-    global frame_index, BUFFERED_BINARY_FRAMES, prev_buffered_binary, prev_convolution, Confidence_values_conv, Confidence_values_decay, C_old_conv
 
-    if event.key != 'right':
-        return
-
-    if frame_index >= len(df):
-        print("Reached end of frames.")
-        return
-    
+while(True):
     # Extract and parse data
     msg = df['data'][frame_index]
     index = msg.find("data=")
@@ -149,7 +140,4 @@ def on_key(event):
     # Update previous
     prev_buffered_binary = buffered_binary.copy()
     C_old_conv = belief_map
-
-# Bind the handler
-fig.canvas.mpl_connect('key_press_event', on_key)
-plt.show()
+    plt.pause(0.05)

@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import ndimage
 from scipy.spatial.transform import Rotation as R
-from scipy.ndimage import map_coordinates, label, center_of_mass
+from scipy.ndimage import map_coordinates, label, center_of_mass, shift
 import matplotlib.pyplot as plt
 from scipy.optimize import linear_sum_assignment
 
@@ -243,7 +243,7 @@ def evolve(confidence_map, labels, blobs, dt=0.02):
     '''
     Estimates next confidence map at next time-step
     '''
-    H,W = confidence_map.shape
+    H, W = confidence_map.shape
     predicted_map = np.zeros_like(confidence_map)
 
     for lab, blob in enumerate(blobs, start=1):
@@ -254,27 +254,21 @@ def evolve(confidence_map, labels, blobs, dt=0.02):
         avg_vx = blob['avg_vx']
         avg_vy = blob['avg_vy']
 
-        ys, xs = np.nonzero(cluster_mask)
+        # Shift the entire blob mask by velocity * dt
+        shift_x = avg_vx * dt
+        shift_y = avg_vy * dt
 
-        # Compute new positions
-        xs_new = xs + avg_vx * dt +0.5
-        ys_new = ys + avg_vy * dt +0.5
+        # Extract the blob's confidence submap
+        blob_conf = confidence_map * cluster_mask
 
-        # Round and clip to grid
-        xs_int = np.clip(np.round(xs_new).astype(int), 0, W - 1)
-        ys_int = np.clip(np.round(ys_new).astype(int), 0, H - 1)
+        # Shift using interpolation = 0 (nearest) so we don't smear
+        shifted_blob = shift(blob_conf, shift=(shift_y, shift_x), order=0, mode='constant', cval=0.0)
 
-        # Scatter occupancy values into new map
-        np.add.at(predicted_map, (ys_int, xs_int), confidence_map[ys, xs])
+        # Add the shifted blob to the predicted map
+        predicted_map = np.maximum(predicted_map, shifted_blob)
 
-    # Clip to valid range [0,1]
     predicted_map = np.clip(predicted_map, 0, 1)
-
     return predicted_map
-
-def update(predicted_map, observed_map, alpha=0.8):
-    belief_map =  alpha*predicted_map+(1-alpha)*observed_map
-    return belief_map
 
 def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.05, speed_threshold=0.0001):
     speed = np.hypot(vx_s, vy_s)
@@ -282,7 +276,8 @@ def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.05, speed_thre
     labels = np.zeros((H,W))
 
     # Build mask of valid cells
-    mask = (confidence_map >= conf_threshold) #& (speed >= 0.0001)
+    # mask = (confidence_map >= conf_threshold) #& (speed >= 0.0001)
+    mask = (speed>1e-5)
 
     # If mask is empty, return empty list immediately
     if np.sum(mask) == 0:
@@ -365,4 +360,6 @@ def update_tracks(detected_blobs, frame_num, tracked_clusters, next_track_id, dt
 
     return tracked_clusters, next_track_id
 
-
+def filter(predicted_map, confidence_map, alpha=0.7):
+    updated_map = alpha*predicted_map + (1-alpha)*confidence_map
+    return updated_map
