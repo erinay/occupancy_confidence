@@ -2,8 +2,7 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial.transform import Rotation as R
 from scipy.ndimage import map_coordinates, label, center_of_mass, shift
-import matplotlib.pyplot as plt
-from scipy.optimize import linear_sum_assignment
+import cv2
 
 def Filtered_Occupancy(occupancy_data, N_frames):
     """
@@ -38,7 +37,7 @@ def Filtered_Occupancy_Convolution(occupancy_data,  C_old, num_rings=1, decay=0.
     Returns:
         buffered_binary_conv, normalized_confidence, filtered_occupancy
     """
-    occupancy_map = occupancy_data[-1]
+    occupancy_map = occupancy_data
     kernel = create_square_decay_kernel(kernel_size=5, decay=0.2)
     # TF old points to current frame 
     Confidence_values = np.copy(C_old)
@@ -95,25 +94,11 @@ def create_square_decay_kernel(kernel_size=3, decay=0.2):
 
     return kernel
 
-def decay_masked(pc_data, occupancy_map, visibility_mask, decay_rate=0.5,decay_rate_background=0.95):
-    # Grow visibility mask area
-    kernel = np.ones((30, 30), np.uint8)  # 5x5 square kernel
-    grown_mask = ndimage.convolve(visibility_mask.astype(np.uint8), kernel,  mode='constant', cval=0.0).astype(bool)
-    background_mask = ~grown_mask
-
-    if np.count_nonzero(grown_mask)>0:
-        occupancy_map[grown_mask] *= decay_rate
-        occupancy_map[grown_mask] += pc_data.astype(float)[grown_mask]
-    
-    occupancy_map[background_mask]*=decay_rate_background
-    # print(np.amax(occupancy_map))
-
-    return occupancy_map
-
-def decay_mask_convolution(occupancy_data, C_old):
+def Filtered_Occupancy_Convolution_Masked(occupancy_data, C_old):
     Confidence_values = np.copy(C_old)
-    # Buffered binary convolution
     kernel = create_square_decay_kernel(kernel_size=5, decay=0.2)
+    
+    # Buffered binary convolution
     buffered_binary_conv = ndimage.convolve(occupancy_data, kernel, mode='constant', cval=0.0)
     
     # Grow visibility mask area
@@ -142,13 +127,10 @@ def decay_mask_convolution(occupancy_data, C_old):
     
     # Decrase confidence in regions in background by lesser amount
     C_minus = 0.0 # Confidence reduction for weak responses`
-    beta2 = 0.8
-    k = 0.8
-    sig2= 1 - np.exp(-beta2 * k / 2)  # sigmoid
-    sig2 = 0.05
-    Confidence_values[background_mask] = (1 - sig2) * C_old[background_mask]   
+    sig3 = 0.05
+    Confidence_values[background_mask] = (1 - sig3) * C_old[background_mask]   
     
-    return Confidence_values    
+    return buffered_binary_conv, Confidence_values    
 
 def decay_occupancy(pc_data, occupancy_map, decay_rate=0.5, alpha=1.0):
     occupancy_map *= decay_rate
@@ -255,8 +237,8 @@ def evolve(confidence_map, labels, blobs, dt=0.02):
         avg_vy = blob['avg_vy']
 
         # Shift the entire blob mask by velocity * dt
-        shift_x = avg_vx * dt
-        shift_y = avg_vy * dt
+        shift_x = avg_vx
+        shift_y = avg_vy
 
         # Extract the blob's confidence submap
         blob_conf = confidence_map * cluster_mask
@@ -315,51 +297,50 @@ def get_motion_blobs(vx_s, vy_s, confidence_map, conf_threshold=0.05, speed_thre
 
     return labels, blobs
 
-## Cluster Tracking
-def update_tracks(detected_blobs, frame_num, tracked_clusters, next_track_id, dt=0.02, max_dist=1.0):
-    assigned_blobs = set()
-    assigned_tracks = set()
+def evolve_map(conf_map, u, v):
+    H, W = conf_map.shape
+    # Create grid of coordinates in new frame
+    grid_x, grid_y = np.meshgrid(np.arange(W), np.arange(H))
 
-    for i, track in enumerate(tracked_clusters):
-        min_dist = float('inf')
-        min_j = None
-        for j, blob in enumerate(detected_blobs):
-            if j in assigned_blobs:
-                continue
-            dist = np.linalg.norm(np.array(track['centroid']) - np.array(blob['centroid']))
-            if dist < min_dist:
-                min_dist = dist
-                min_j = j
+    # Calculate source coordinates in old frame for backward warp
+    src_x = grid_x + u +0.5
+    src_y = grid_y + v+0.5
 
-        if min_j is not None and min_dist < max_dist:
-            blob = detected_blobs[min_j]
-            track['centroid'] = blob['centroid']
-            track['avg_vx'] = blob['avg_vx']
-            track['avg_vy'] = blob['avg_vy']
-            track['size'] = blob['size']
-            track['last_seen'] = frame_num
-            track['missed'] = 0
-            assigned_blobs.add(min_j)
-            assigned_tracks.add(i)
-        else:
-            x, y = track['centroid']
-            vx, vy = track['avg_vx'], track['avg_vy']
-            predicted_centroid = (x + vx * dt, y + vy * dt)
-            track['centroid'] = predicted_centroid
-            track['missed'] += 1
+    # Clip coordinates to valid range
+    src_x = np.clip(src_x, 0, W-1)
+    src_y = np.clip(src_y, 0, H-1)
 
-    tracked_clusters[:] = [t for t in tracked_clusters if t['missed'] <= 5]
-
-    for j, blob in enumerate(detected_blobs):
-        if j not in assigned_blobs:
-            blob['last_seen'] = frame_num
-            blob['missed'] = 0
-            blob['track_id'] = next_track_id  # assign unique ID here
-            next_track_id += 1
-            tracked_clusters.append(blob)
-
-    return tracked_clusters, next_track_id
+    # Use cv2.remap for interpolation (expects float32)
+    old_conf_map_f = conf_map.astype(np.float32)
+    conf_current_frame = cv2.remap(old_conf_map_f, src_x.astype(np.float32), src_y.astype(np.float32), interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+ 
+    return conf_current_frame
 
 def filter(predicted_map, confidence_map, alpha=0.7):
     updated_map = alpha*predicted_map + (1-alpha)*confidence_map
     return updated_map
+
+def thresholding_std(conf_map, predicted_map, sigma_factor=1.0):
+    # Statistical Information
+    mu = np.mean(conf_map)
+    sigma = np.std(conf_map)
+
+    # Thresholding
+    T_hi = mu + sigma_factor * sigma
+    T_lo = 2*mu - sigma_factor * sigma
+
+    # Clip thresholds into valid range
+    T_hi = np.clip(T_hi, 0, 1)
+    T_lo = np.clip(T_lo, 0, 1)
+
+    # --- Step 2: Apply initial binary masks ---
+    strong = conf_map >= T_hi
+    weak = (conf_map >= T_lo) & (conf_map < T_hi)
+
+    kernel = np.ones((2,2))
+    strong_nbhd = ndimage.convolve(strong, kernel,mode='constant',cval=0)
+     # Promote weak pixels that are near any strong pixel
+    grow_mask = (strong_nbhd > 0) & weak
+
+    binary_map = strong | grow_mask
+    return binary_map.astype(np.uint8), (T_lo, T_hi)

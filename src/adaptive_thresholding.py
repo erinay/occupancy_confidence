@@ -16,25 +16,23 @@ df = pd.read_csv("data/mEnv_mRobf/_map_convert.csv")
 
 HEIGHT, WIDTH, N_frames = 120, 120, 5
 step=1
-scale_factor=5e4
+scale_factor=5e2
 # scale_factor=1e8*2.5
 y_quiv, x_quiv = np.mgrid[0:HEIGHT:step, 0:WIDTH:step]
 
-fig, axs = plt.subplots(2,3, figsize=(15,4))
+fig, axs = plt.subplots(2,3, figsize=(15,8))
 axs = axs.flatten()
 
 im0 = axs[0].imshow(np.zeros((HEIGHT,WIDTH)), cmap='gray', vmin=0, vmax=1,  origin='lower') # incoming data
 im1 = axs[1].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # overlay velocity from "raw"
 im2 = axs[2].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # predict next map with velocity data
 im3 = axs[3].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # combine
-im4 = axs[4].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=3,  origin='lower') # combine
-im5 = axs[5].imshow(np.zeros((HEIGHT,WIDTH)), cmap='viridis', vmin=0, vmax=1,  origin='lower') # combine
+im4 = axs[4].imshow(np.zeros((HEIGHT,WIDTH)), cmap='gray', vmin=0, vmax=1,  origin='lower') # convolution
 
 
 # Define quiver
 quiver = axs[3].quiver(x_quiv, y_quiv, np.zeros_like(x_quiv), np.zeros_like(y_quiv), 
                        color='red', scale=1, scale_units='xy', angles='xy')
-
 for ax in axs:
     ax.axis("off")
 
@@ -42,6 +40,7 @@ for ax in axs:
 frame_init=1000
 frame_index=frame_init
 BUFFERED_BINARY_FRAMES=[]
+prev_buffered_binary = np.zeros((HEIGHT,WIDTH))
 prev_convolution = np.zeros((HEIGHT,WIDTH))
 
 # necessary for current function definitions (i think?, i.e. not necessarily used)
@@ -51,10 +50,11 @@ confidence_combined = np.zeros((HEIGHT,WIDTH))
 binary_map = np.zeros((HEIGHT, WIDTH))
 
 def on_key(event):
-    global frame_index, BUFFERED_BINARY_FRAMES, prev_convolution, Confidence_values_conv, Confidence_values_decay, C_old_conv, binary_map
+    global frame_index, BUFFERED_BINARY_FRAMES, prev_buffered_binary, prev_convolution, Confidence_values_conv, Confidence_values_decay, C_old_conv, binary_map
 
     if event.key != 'right':
         return
+    print(len(df))
     if frame_index >= len(df):
         print("Reached end of frames.")
         return
@@ -67,7 +67,7 @@ def on_key(event):
     values = [int(x) for x in occupancy_str.split(',')]
     occupancy_arr = np.array(values).reshape(HEIGHT, WIDTH)
 
-    # BUFFER & 
+    # BUFFER
     buffered_binary = ndimage.binary_dilation(occupancy_arr, iterations=1).astype(int)
     buffered_binary_conv, Confidence_values_conv = Filtered_Occupancy_Convolution_Masked(buffered_binary, C_old_conv)
 
@@ -86,32 +86,28 @@ def on_key(event):
     fx = vx[::step,::step]*scale_factor
     fy = vy[::step, ::step]*scale_factor
 
-    # Evolve map
-    predicted_map = evolve_map(Confidence_values_conv, vx, vy)
-    belief_map = filter(predicted_map, Confidence_values_conv, alpha=0.2)
-    
+    binary_map, T_range = thresholding_std(C_old_conv, Confidence_values_conv)
+
     # Update plots
-    im0.set_data(buffered_binary)
+    im0.set_data(buffered_binary_conv)
     axs[0].set_title(f"Convolution Frame\nFrame {frame_index}")
-    im1.set_data(C_old_conv)
-    axs[1].set_title(f"Confidence from Convolution on Previous \nframe {frame_index-1}")
-    im2.set_data(Confidence_values_conv)
-    axs[2].set_title(f"Confidence from Convolution on \nframe {frame_index}")
+    im1.set_data(Confidence_values_conv)
+    axs[1].set_title(f"Confidence from Convolution on \nframe {frame_index}")
+    im2.set_data(C_old_conv)
+    axs[2].set_title(f"Confidence from Convolution on Previous \nframe {frame_index-1}")
     im3.set_data(Confidence_values_conv)
     quiver.set_offsets(np.stack((x_quiv.ravel(), y_quiv.ravel()), axis=-1))
     quiver.set_UVC(fx.ravel(), fy.ravel())
     axs[3].set_title("Applied optical flow")
-    im4.set_data(belief_map)
-    axs[4].set_title("Filtered Belief Map")
-    im5.set_data(predicted_map)
-    axs[5].set_title("Predicted Map")
+    im4.set_data(binary_map)
+    axs[4].set_title("Binary Boundary Map")
 
-    fig.canvas.draw_idle()
-
-    frame_index += 1
-    print(frame_index)
     # Update previous
-    C_old_conv = belief_map
+    prev_buffered_binary = buffered_binary.copy()
+    C_old_conv = Confidence_values_conv
+    fig.canvas.draw_idle()
+    
+    frame_index += 1
 
 # Bind the handler
 fig.canvas.mpl_connect('key_press_event', on_key)
